@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smsbot-backend"
+version = "0.1.0"
+description = "SMSBot backend and versioned PostgreSQL migrations"
+requires-python = ">=3.11"
+dependencies = [
+    "aq-dbmigration==1.0.2",
+    "fastapi>=0.121,<1",
+    "uvicorn[standard]>=0.34,<1",
+    "sqlalchemy>=2.0,<3",
+    "psycopg[binary]>=3.2,<4",
+    "python-dotenv>=1.0,<2",
+    "argon2-cffi>=23.1",
+    "pyotp>=2.9,<3",
+    "cryptography>=44",
+    "httpx>=0.28,<1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "pglast>=7"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

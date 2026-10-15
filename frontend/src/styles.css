@@ -1,0 +1,16 @@
+@import "tailwindcss";
+@theme { --font-sans: "Inter", "Segoe UI", "Microsoft YaHei", sans-serif; }
+:root { color-scheme: light; font-family: var(--font-sans); color: #263248; background: #f5f7fa; font-synthesis: none; text-rendering: optimizeLegibility; }
+body { margin: 0; min-width: 320px; }
+button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+button { cursor: pointer; }
+input:not([type="checkbox"]), select, textarea { width: 100%; border: 1px solid #dce3ec; border-radius: 10px; background: white; padding: 10px 12px; font-size: 14px; outline: none; transition: border .15s, box-shadow .15s; }
+input:focus, select:focus, textarea:focus { border-color: #0f766e; box-shadow: 0 0 0 3px #0d948814; }
+input[type="checkbox"] { accent-color: #0f766e; width: 16px; height: 16px; }
+textarea { resize: vertical; min-height: 110px; }
+label.field { display: grid; gap: 7px; font-size: 13px; font-weight: 500; color: #475569; }
+.panel { background: white; border: 1px solid #e5eaf1; border-radius: 16px; box-shadow: 0 2px 4px #10203003; }
+.muted { color: #7b8799; }
+.eyebrow { font-size: 10px; font-weight: 700; letter-spacing: .18em; color: #8994a5; }
+::selection { background: #ccfbf1; }
+@media (max-width: 640px) { input:not([type="checkbox"]), select, textarea { font-size: 16px; } }

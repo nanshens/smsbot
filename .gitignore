@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+__pycache__/
+.venv/
+.pio/
+.cache/
+firmware/include/config.local.h
+*.egg-info/
+*.tsbuildinfo
+.pytest_cache/

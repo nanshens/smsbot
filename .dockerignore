@@ -1,0 +1,16 @@
+.git
+.cache
+.venv
+.env
+.env.*
+!.env.example
+**/node_modules
+**/dist
+**/__pycache__
+**/.pytest_cache
+**/*.egg-info
+**/*.tsbuildinfo
+firmware
+**/*.pem
+**/*.key
+**/*.dump
