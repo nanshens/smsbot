@@ -5,6 +5,7 @@ from app.scheduler import guarded
 
 
 def test_lifespan_jobs_run_without_blocking_api_and_stop(monkeypatch):
+    monkeypatch.setattr(main, 'migrate', lambda: None)
     entered = threading.Event()
     release = threading.Event()
     finished = threading.Event()

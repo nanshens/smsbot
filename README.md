@@ -15,7 +15,7 @@
 
 当前固件使用 **Wi-Fi 联网**，蜂窝数据联网尚未实现。QQ 指 QQ 邮箱，不包含 QQ 聊天机器人。
 
-外部程序接入见 [API 使用方法](docs/API使用方法.md)。在「电话卡」→「API Key」签发后即可调用；新固件与外部程序使用同一个手机号 Key，无配对有效期。本次升级新增 `V4__preprovisioned_phones.sql`，本地部署先执行 `python -m app.migrate`，容器启动自动执行迁移。
+外部程序接入见 [API 使用方法](docs/API使用方法.md)。在「电话卡」→「API Key」签发后即可调用；新固件与外部程序使用同一个手机号 Key，无配对有效期。本次升级新增 `V4__preprovisioned_phones.sql`，本地和 Docker 都在 FastAPI 启动时自动执行迁移，无需手动执行。
 
 ## 目录
 
@@ -55,15 +55,6 @@ python -m app.cli generate-secrets
 
 将输出填入 `.env` 的 `APP_SECRET` 和 `CREDENTIAL_ENCRYPTION_KEY`。开发默认 `APP_ORIGIN=http://localhost:5173`，浏览器也使用该地址。
 
-初始化数据库和管理员：
-
-```sh
-python -m app.migrate
-python -m app.cli create-admin --username admin
-```
-
-密码从终端交互输入，至少 8 位。没有默认账号密码和公开注册。
-
 开发时开启两个终端：一个后端、一个前端。后端内置 APScheduler，启动时自动运行转发和维护任务。
 
 ```sh
@@ -74,6 +65,14 @@ cd frontend
 pnpm install --frozen-lockfile
 pnpm dev
 ```
+
+后端会先执行数据库迁移，成功后启动定时任务并接收请求；迁移失败会停止启动。首次启动成功后，在另一个已激活虚拟环境的终端创建管理员：
+
+```sh
+python -m app.cli create-admin --username admin
+```
+
+密码交互输入，至少 8 位。只需创建一次，没有默认账号密码或公开注册。以后更新 SQL 文件后直接重启后端，已执行的版本不会重复应用。
 
 访问 [本地工作台](http://localhost:5173)。首次登录验证码留空，进入 TOTP 扫码绑定流程，保存只展示一次的恢复码。
 
@@ -95,7 +94,7 @@ docker exec -it smsbot python -m app.cli create-admin --username admin
 
 PostgreSQL 使用已有服务或独立容器。数据库地址必须从应用容器可达；同网络数据库容器使用服务名，并给 `docker run` 增加相应 `--network`。也可通过 `-e DATABASE_URL=...` 覆盖文件中的值。
 
-前端端口为 8080，API 为 8000。前端通过 Nginx 同源代理 `/api`。容器等待数据库并迁移，成功后启动 Nginx 和内置定时任务的 API，进程以非 root 用户运行。
+前端端口为 8080，API 为 8000。前端通过 Nginx 同源代理 `/api`。容器等待数据库后启动 Nginx 和 API；API 在开放服务前自动迁移，成功后启动内置定时任务，进程以非 root 用户运行。
 
 ### 内置定时任务
 

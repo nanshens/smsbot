@@ -191,4 +191,4 @@ print(call('/messages/outgoing/' + message['id']))
 
 添加手机号的管理接口为 `POST /api/sims`，请求 `{"name":"我的卡","phone_number":"+8613800000000"}`，返回 `sim_id`、`name`、`phone_number` 和仅本次可见的 `api_key`。重复号码返回 409；已有号码的 Key 管理接口见上表。
 
-登录后可读取 `/api/openapi.json` 查看全部请求字段定义。本次数据库升级新增 `V4__preprovisioned_phones.sql`（此前 V3 已引入 Key 表），启动前执行 `python -m app.migrate`；容器启动流程自动执行迁移。旧版本 V1/V2/V3 不需要修改。若历史数据中存在重复手机号，需要先修正重复号码再迁移；号码唯一性比较忽略非数字字符，不会自动合并或删除历史短信。
+登录后可读取 `/api/openapi.json` 查看全部请求字段定义。本次数据库升级新增 `V4__preprovisioned_phones.sql`（此前 V3 已引入 Key 表），本地和 Docker 都在 FastAPI 启动前置阶段自动执行迁移，无需手动运行迁移命令。旧版本 V1/V2/V3 不需要修改。若历史数据中存在重复手机号，需要先修正重复号码再迁移；号码唯一性比较忽略非数字字符，不会自动合并或删除历史短信。

@@ -1,9 +1,8 @@
-"""Container entry point: bounded DB readiness, atomic migrations, supervisor."""
+"""Container entry point: DB readiness and supervisor; FastAPI owns migrations."""
 import os
 import time
 from .config import settings
 from .db import engine
-from .migrate import migrate
 
 
 def main():
@@ -17,10 +16,6 @@ def main():
             if attempt == 11:
                 raise SystemExit('Database unavailable after bounded retries') from None
             time.sleep(5)
-    try:
-        migrate()
-    except Exception as exc:
-        raise SystemExit('Migration failed (' + type(exc).__name__ + '); application not started') from None
     os.execvp('supervisord', ['supervisord', '-n', '-c', '/app/deploy/supervisord.conf'])
 
 

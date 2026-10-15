@@ -8,10 +8,13 @@ from sqlalchemy.exc import IntegrityError
 from . import auth, admin, devices, sim_api
 from .db import engine, one
 from .scheduler import start_scheduler
+from .migrate import migrate
 
 
 @asynccontextmanager
 async def lifespan(app):
+    # Uvicorn waits for lifespan startup before accepting HTTP requests.
+    await asyncio.to_thread(migrate)
     scheduler = start_scheduler()
     app.state.scheduler = scheduler
     try:
