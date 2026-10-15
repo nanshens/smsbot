@@ -5,10 +5,42 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Request, Response, HTTPException
 from .db import connection, one, rows, run
 from .config import settings
-from .schemas import Registration, Heartbeat, Incoming, Result
+from .schemas import Registration, Heartbeat, Incoming, Result, Activation
 from .security import device, throttle, digest, fingerprint, encrypt, decrypt, audit
 
 router = APIRouter(prefix='/api/device', tags=['device'])
+
+
+@router.post('/activate')
+def activate(body: Activation, request: Request, db=Depends(connection, scope='function')):
+    from .sim_api import authenticate
+    key = authenticate(db, request)
+    run(db, 'SELECT pg_advisory_xact_lock(7367281302)')
+    sim = one(db, 'SELECT * FROM sim_cards WHERE id=:id', id=key['sim_id'])
+    dev = one(db, 'SELECT * FROM devices WHERE hardware_id=:hardware FOR UPDATE', hardware=body.hardware_id)
+    if sim['iccid'] and sim['iccid'] != body.iccid:
+        raise HTTPException(409, 'ICCID does not match this phone')
+    if sim['device_id'] and (not dev or sim['device_id'] != dev['id']):
+        raise HTTPException(409, 'Unbind the old device before moving this SIM')
+    other = one(db, 'SELECT id FROM sim_cards WHERE iccid=:iccid AND id<>:id', iccid=body.iccid, id=sim['id'])
+    if other:
+        raise HTTPException(409, 'ICCID already belongs to another phone')
+    if dev and one(db, 'SELECT id FROM sim_cards WHERE device_id=:device AND id<>:id', device=dev['id'], id=sim['id']):
+        raise HTTPException(409, 'Device already belongs to another phone')
+    did = dev['id'] if dev else uuid4()
+    if dev:
+        run(db, '''UPDATE devices SET api_key_hash=NULL,key_revoked_at=NULL,enabled=true,iccid=:iccid,
+            firmware_version=:fw,modem_version=:modem,last_seen_at=now() WHERE id=:id''',
+            id=did, iccid=body.iccid, fw=body.firmware_version, modem=body.modem_version)
+        run(db, 'UPDATE device_registrations SET response_encrypted=NULL WHERE device_id=:id', id=did)
+    else:
+        run(db, '''INSERT INTO devices(id,hardware_id,name,iccid,firmware_version,modem_version,last_seen_at)
+            VALUES (:id,:hardware,:name,:iccid,:fw,:modem,now())''', id=did, hardware=body.hardware_id,
+            name=sim['name'], iccid=body.iccid, fw=body.firmware_version, modem=body.modem_version)
+    run(db, 'UPDATE sim_cards SET device_id=:device,iccid=:iccid WHERE id=:id', id=sim['id'], device=did, iccid=body.iccid)
+    audit(db, 'device.activated', device_id=did, resource=sim['id'])
+    return {'device_id': did, 'sim_id': sim['id'], 'poll_interval_ms': settings().poll_ms,
+            'heartbeat_interval_ms': settings().heartbeat_ms}
 
 
 def card_check(dev, iccid):

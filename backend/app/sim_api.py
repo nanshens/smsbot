@@ -1,20 +1,31 @@
-"""Manually issued SIM-scoped integration credentials, separate from modem keys."""
+"""Permanent manually issued phone credentials for integrations and devices."""
 import secrets
 from datetime import datetime
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from .db import connection, one, run
 from .security import current, digest, audit
-from .schemas import Outgoing
+from .schemas import Outgoing, PhoneCreate
 from .admin import enqueue, list_messages, cancel_message, remove_incoming, remove_outgoing
 
 management = APIRouter(prefix='/api/sims', tags=['SIM API key management'])
 router = APIRouter(prefix='/api/v1/sim', tags=['SIM integration'])
 
 
+@management.post('')
+def create_phone(body: PhoneCreate, request: Request, db=Depends(connection, scope='function')):
+    user = current(db, request)
+    sid = uuid4()
+    run(db, 'INSERT INTO sim_cards(id,name,phone_number) VALUES (:id,:name,:phone)',
+        id=sid, name=body.name, phone=body.phone_number)
+    result = issue(db, sid, user)
+    audit(db, 'sim.created', user=user['id'], resource=sid)
+    return {**result, 'name': body.name, 'phone_number': body.phone_number}
+
+
 def lock_sim(db, sim_id):
-    if not one(db, 'SELECT id FROM sim_cards WHERE id=:id FOR NO KEY UPDATE', id=sim_id):
+    if not one(db, 'SELECT id FROM sim_cards WHERE id=:id', id=sim_id):
         raise HTTPException(404, '电话卡不存在')
 
 
@@ -29,14 +40,16 @@ def key_info(sim_id: UUID, request: Request, db=Depends(connection, scope='funct
 
 def issue(db, sim_id, user, reset=False):
     lock_sim(db, sim_id)
-    existing = one(db, 'SELECT sim_id FROM sim_api_keys WHERE sim_id=:id', id=sim_id)
+    existing = one(db, 'SELECT sim_id FROM sim_api_keys WHERE sim_id=:id FOR UPDATE', id=sim_id)
     if bool(existing) != reset:
         raise HTTPException(409, '请先签发 Key' if reset else 'Key 已存在，请使用重置')
     key = 'sms_sim_' + secrets.token_urlsafe(32)
-    run(db, '''INSERT INTO sim_api_keys(sim_id,key_hash,key_hint,created_by)
-        VALUES (:id,:hash,:hint,:user) ON CONFLICT (sim_id) DO UPDATE SET
-        key_hash=EXCLUDED.key_hash,key_hint=EXCLUDED.key_hint,created_by=EXCLUDED.created_by,
-        created_at=now(),last_used_at=NULL''', id=sim_id, hash=digest(key), hint=key[:12]+'…'+key[-4:], user=user['id'])
+    sql = '''UPDATE sim_api_keys SET key_hash=:hash,key_hint=:hint,created_by=:user,
+        created_at=now(),last_used_at=NULL WHERE sim_id=:id''' if reset else '''
+        INSERT INTO sim_api_keys(sim_id,key_hash,key_hint,created_by)
+        VALUES (:id,:hash,:hint,:user) ON CONFLICT (sim_id) DO NOTHING'''
+    if not run(db, sql, id=sim_id, hash=digest(key), hint=key[:12]+'…'+key[-4:], user=user['id']).rowcount:
+        raise HTTPException(409, 'Key 已存在，请刷新后重试')
     audit(db, 'sim.api_key.reset' if reset else 'sim.api_key.issued', user=user['id'], resource=sim_id)
     return {'sim_id': sim_id, 'api_key': key}
 

@@ -9,6 +9,7 @@ description = "SMSBot backend and versioned PostgreSQL migrations"
 requires-python = ">=3.11"
 dependencies = [
     "aq-dbmigration==1.0.2",
+    "apscheduler>=3.11,<4",
     "fastapi>=0.121,<1",
     "uvicorn[standard]>=0.34,<1",
     "sqlalchemy>=2.0,<3",

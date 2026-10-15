@@ -141,9 +141,8 @@ def create_outgoing(body: Outgoing, request: Request, db=Depends(connection, sco
 
 
 def enqueue(db, body, user_id, key_namespace=''):
-    if not one(db, '''SELECT s.id FROM sim_cards s JOIN devices d ON d.id=s.device_id
-        WHERE s.id=:id AND d.enabled AND d.key_revoked_at IS NULL''', id=body.sim_id):
-        raise HTTPException(400, '请先绑定设备')
+    if not one(db, 'SELECT id FROM sim_cards WHERE id=:id', id=body.sim_id):
+        raise HTTPException(404, '电话卡不存在')
     if body.retry_of and not one(db, "SELECT id FROM outgoing_sms WHERE id=:id AND sim_id=:sim AND status IN ('unknown','failed')", id=body.retry_of, sim=body.sim_id):
         raise HTTPException(400, '只能关联同一卡片的失败或结果未知记录')
     signature = fingerprint(body.model_dump(exclude={'idempotency_key'}))

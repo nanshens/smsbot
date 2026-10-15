@@ -1,12 +1,26 @@
 import logging
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.exc import IntegrityError
 from . import auth, admin, devices, sim_api
 from .db import engine, one
+from .scheduler import start_scheduler
 
-app = FastAPI(title='SMSBot', version='0.1.0', docs_url=None, redoc_url=None, openapi_url=None)
+
+@asynccontextmanager
+async def lifespan(app):
+    scheduler = start_scheduler()
+    app.state.scheduler = scheduler
+    try:
+        yield
+    finally:
+        # Stop scheduling, then let in-flight deliveries commit before exit.
+        await asyncio.to_thread(scheduler.shutdown, wait=True)
+
+app = FastAPI(title='SMSBot', version='0.1.0', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(devices.router)

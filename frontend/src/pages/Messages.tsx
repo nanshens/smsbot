@@ -14,7 +14,7 @@ export function Compose({ sims, onClose, onSent, original }: { sims: Sim[]; onCl
   const [key] = useState(() => crypto.randomUUID())
   return <Modal open onClose={() => { if (!busy) onClose() }} title={original ? '重新发送短信' : '新建短信'} description={original ? '原短信可能已提交给运营商。确认后创建新的发送记录，可能重复发送。' : '选择电话卡，设备将自动领取并发送。'}>
     <form className="space-y-5" onSubmit={async e => { e.preventDefault(); setBusy(true); const values = Object.fromEntries(new FormData(e.currentTarget)); const ok = await action(() => post('/outgoing', {...values, idempotency_key: key, retry_of: original?.id || null}), '已加入发送队列'); setBusy(false); if (ok) { onSent(); onClose() } }}>
-      <Field title="发送电话卡"><select name="sim_id" defaultValue={original?.sim_id || ''} required><option value="" disabled>选择已绑定的电话卡</option>{sims.filter(s => s.device_id).map(s => <option key={s.id} value={s.id}>{s.name} · {s.phone_number || s.iccid} {!s.online ? '（离线，稍后发送）' : ''}</option>)}</select></Field>
+      <Field title="发送电话卡"><select name="sim_id" defaultValue={original?.sim_id || ''} required><option value="" disabled>选择电话卡</option>{sims.map(s => <option key={s.id} value={s.id}>{s.name} · {s.phone_number || s.iccid} {!s.online ? '（离线，稍后发送）' : ''}</option>)}</select></Field>
       <Field title="收件号码"><input name="recipient" placeholder="例如 +8613800000000" defaultValue={original?.recipient} pattern="\+?[0-9]{3,20}" required/></Field>
       <Field title="短信正文"><textarea name="body" value={body} onChange={e => setBody(e.target.value)} maxLength={670} required placeholder="输入短信内容…" rows={5}/></Field>
       <div className="flex justify-between text-xs text-slate-400"><span>使用 UCS2 编码，不支持 emoji</span><span>{body.length} / 670 · {body.length <= 70 ? 1 : Math.ceil(body.length / 67)} 条计费分片</span></div>

@@ -42,9 +42,15 @@ def system(monkeypatch):
 
 
 @pytest.fixture
-def client(system):
+def client(system, monkeypatch):
     from fastapi.testclient import TestClient
-    from app.main import app
+    from app import main
+    # API tests drive the durable queue explicitly; lifecycle has its own tests.
+    class IdleScheduler:
+        def shutdown(self, wait=True):
+            pass
+    monkeypatch.setattr(main, 'start_scheduler', IdleScheduler)
+    app = main.app
     with TestClient(app) as client:
         client.headers['origin'] = 'http://testserver'
         yield client

@@ -30,7 +30,7 @@ def test_key_lifecycle_and_auth_separation(paired):
     assert client.get('/api/v1/sim', headers=headers).status_code == 401
     new = {'Authorization':'Bearer '+replacement}
     assert client.get('/api/v1/sim', headers=new).status_code == 200
-    assert client.post('/api/device/heartbeat', headers=new, json={'iccid':payload['iccid']}).status_code == 401
+    assert client.post('/api/device/heartbeat', headers=new, json={'iccid':payload['iccid']}).status_code == 200
     assert client.delete(path).status_code == 200
     assert client.get('/api/v1/sim', headers=new).status_code == 401
     assert client.post('/api/device/heartbeat', headers={'Authorization':'Bearer '+device['api_key']}, json={'iccid':payload['iccid']}).status_code == 200

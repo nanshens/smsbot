@@ -69,6 +69,18 @@ class Registration(Input):
     modem_version: str = Field(default='', max_length=150)
 
 
+class Activation(Input):
+    hardware_id: str = Field(min_length=6, max_length=128)
+    iccid: str = Field(pattern=r'^[0-9]{10,32}$')
+    firmware_version: str = Field(default='', max_length=100)
+    modem_version: str = Field(default='', max_length=150)
+
+
+class PhoneCreate(Input):
+    name: str = Field(min_length=1, max_length=100)
+    phone_number: str = Field(pattern=r'^\+?[0-9]{3,20}$')
+
+
 class Heartbeat(Input):
     iccid: str = Field(max_length=32)
     operator_name: str = Field(default='', max_length=100)

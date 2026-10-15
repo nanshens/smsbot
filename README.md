@@ -5,8 +5,8 @@
 ## 功能
 
 - 用户名/密码 + 强制 TOTP，首次绑定、恢复码、修改密码、重置验证器、会话撤销与登录限流。
-- 配对码注册设备、Key 摘要存储、撤销设备、按 ICCID 管理电话卡与状态心跳。
-- 每张电话卡独立的对外 API Key，页面手动签发、重置、删除；仅能操作对应卡片。
+- 先添加手机号并签发永久 API Key，设备随时接入、Key 摘要存储、手动重置/删除、按 ICCID 管理电话卡与状态心跳。
+- 每个手机号最多一个永久 API Key，设备和外部程序共用；页面手动签发、重置、删除，仅能操作对应卡片。
 - 收信持久化、事件去重、分页/搜索/筛选、单条及批量删除、按卡绑定转发通道。
 - SMTP（QQ 邮箱/Gmail/自定义）、Bark、PushDeer；加密凭据、测试通知与持久化重试队列。
 - 发信排队、默认 1 秒轮询、原子领取、幂等回执、超时结果未知、人工重发、取消和删除。
@@ -15,18 +15,18 @@
 
 当前固件使用 **Wi-Fi 联网**，蜂窝数据联网尚未实现。QQ 指 QQ 邮箱，不包含 QQ 聊天机器人。
 
-外部程序接入见 [API 使用方法](docs/API使用方法.md)。在「电话卡」→「API Key」签发后即可调用；设备凭据与对外 Key 独立管理。本次升级新增 `V3__sim_api_keys.sql`，本地部署先执行 `python -m app.migrate`，容器启动自动执行迁移。
+外部程序接入见 [API 使用方法](docs/API使用方法.md)。在「电话卡」→「API Key」签发后即可调用；新固件与外部程序使用同一个手机号 Key，无配对有效期。本次升级新增 `V4__preprovisioned_phones.sql`，本地部署先执行 `python -m app.migrate`，容器启动自动执行迁移。
 
 ## 目录
 
 ```text
-backend/app/                     Python API、worker、迁移与管理员命令
+backend/app/                     Python API、内置定时任务、迁移与管理员命令
 backend/resource/db_migration/   V1__init.sql、V2__runtime_guards.sql
 backend/tests/                   PostgreSQL 集成测试
 frontend/                        React / TypeScript / Vite / pnpm
 firmware/                        PlatformIO 固件、配置模板、烧录流程
 deploy/                          Nginx 与 Supervisor 配置
-Dockerfile                       前后端和 worker 单容器镜像
+Dockerfile                       前后端单容器镜像
 .env.example                     环境变量示例
 ```
 
@@ -64,14 +64,12 @@ python -m app.cli create-admin --username admin
 
 密码从终端交互输入，至少 8 位。没有默认账号密码和公开注册。
 
-分别开启三个终端：
+开发时开启两个终端：一个后端、一个前端。后端内置 APScheduler，启动时自动运行转发和维护任务。
 
 ```sh
 # 终端一：已激活虚拟环境
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-# 终端二：已激活虚拟环境
-python -m app.worker
-# 终端三
+# 终端二：前端
 cd frontend
 pnpm install --frozen-lockfile
 pnpm dev
@@ -81,7 +79,7 @@ pnpm dev
 
 ## 连接设备
 
-在「电话卡」生成配对码，然后按照 [固件烧录流程](firmware/烧录流程.md) 配置 Wi-Fi、平台 HTTPS 地址、CA 和配对码。
+在「电话卡」添加手机号，保存永久 API Key，然后按照 [固件烧录流程](firmware/烧录流程.md) 配置 Wi-Fi、平台 HTTPS 地址、CA 和 PHONE_API_KEY。
 
 Vite 开发服务是 HTTP，不能直接给此固件使用。设备需要可达且证书有效的 HTTPS 入口（例如反向代理到 8080）。不能使用设备自身的 `localhost` 指向电脑，也不能关闭证书校验。
 
@@ -97,7 +95,15 @@ docker exec -it smsbot python -m app.cli create-admin --username admin
 
 PostgreSQL 使用已有服务或独立容器。数据库地址必须从应用容器可达；同网络数据库容器使用服务名，并给 `docker run` 增加相应 `--network`。也可通过 `-e DATABASE_URL=...` 覆盖文件中的值。
 
-前端端口为 8080，API 为 8000。前端通过 Nginx 同源代理 `/api`。容器等待数据库并迁移，成功后启动 Nginx、API、worker，进程以非 root 用户运行。
+前端端口为 8080，API 为 8000。前端通过 Nginx 同源代理 `/api`。容器等待数据库并迁移，成功后启动 Nginx 和内置定时任务的 API，进程以非 root 用户运行。
+
+### 内置定时任务
+
+FastAPI lifespan 启动 APScheduler，退出时停止调度并等待正在执行的任务结束。每 1 秒领取一条到期转发任务，每 30 秒处理租约超时、过期会话和临时凭据。同步数据库和通知请求在线程池执行，不阻塞 API 事件循环；同一 job 在本进程内不会重入。
+
+更新已有环境时先安装 `backend/requirements.lock` 中的新依赖，并停止旧版独立 worker。现在只需启动 Uvicorn。默认一个 API 进程；若使用多个进程或副本，每个进程都有调度器，转发领取通过 PostgreSQL 行锁和租约协调，维护任务使用数据库互斥锁。
+
+调度周期保存在进程内，短信任务和重试状态保存在 PostgreSQL，重启不会丢失待转发短信。异常任务记录脱敏错误，下一个周期继续运行。通知服务接受发送后若连接中断，重试仍可能产生重复通知，不能保证外部服务恰好一次送达。
 
 生产设置 `APP_ORIGIN=https://你的域名`、`COOKIE_SECURE=true`，外层配置 HTTPS。仅本地 HTTP 8080 测试时设置 `APP_ORIGIN=http://localhost:8080`、`COOKIE_SECURE=false`。真实 `.env` 不进入镜像。
 

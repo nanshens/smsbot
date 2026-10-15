@@ -105,6 +105,14 @@ def device(db, request):
     header = request.headers.get('authorization', '')
     if not header.startswith('Bearer '):
         raise HTTPException(401, 'Invalid device key')
+    if header.startswith('Bearer sms_sim_'):
+        from .sim_api import authenticate
+        key = authenticate(db, request)
+        row = one(db, '''SELECT d.*,s.id AS sim_id FROM sim_cards s JOIN devices d ON d.id=s.device_id
+            WHERE s.id=:id AND d.enabled AND d.key_revoked_at IS NULL''', id=key['sim_id'])
+        if not row:
+            raise HTTPException(401, 'Device not activated or disabled')
+        return row
     row = one(db, '''SELECT d.*,s.id AS sim_id FROM devices d JOIN sim_cards s ON s.device_id=d.id
         WHERE d.api_key_hash=:hash AND d.key_revoked_at IS NULL AND d.enabled=true''', hash=digest(header[7:]))
     if not row:

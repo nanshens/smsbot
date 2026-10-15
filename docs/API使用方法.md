@@ -2,16 +2,18 @@
 
 ## 1. 签发手机号 API Key
 
-1. 先让 ESP32 完成配对注册，平台「电话卡」页面出现对应卡片。
-2. 在卡片「设置」填写手机号（号码标签不会改变 SIM 实际发信号码）。
-3. 点击卡片的「API Key」→「签发 API Key」，立即复制保存。
-4. 调用程序通过环境变量保存 Key，每次请求在请求头中携带它。
+1. 在「电话卡」点击「添加手机号」，填写名称和号码。
+2. 平台立即为这个手机号签发唯一的 API Key，复制保存；此时不需要连接 ESP32。
+3. 外部程序立刻可以使用 Key 查询此卡、查看短信、创建待发送任务。设备未接入时，任务保留在队列中。
+4. 任何时候把这个 Key 填入固件的 `PHONE_API_KEY`，设备即可激活并上报，不需要配对码。
 
-每张卡片最多有一个有效的对外 Key，注册时不会自动签发。页面可查看脱敏标识、签发时间和最近成功调用时间，支持重置和删除。完整 Key 只在签发/重置的响应中返回一次，数据库只保存摘要，关闭窗口后不能找回；响应丢失时请重置。
+**Key 永久有效，不设 30 分钟或其他自动到期时间，不会因首次使用而被消耗。** 每个手机号最多一个有效 Key，平台不保存可恢复的明文。页面可以签发、重置、删除，完整 Key 仅签发时显示；丢失请重置。
 
-重置或删除成功返回后，旧 Key 的新请求会返回 401；已经开始的请求会先完成。已排队的短信继续执行，若需停止请另行取消。删除 Key 不删除电话卡和短信。重置后重试同一个发信请求仍需沿用原来的幂等 UUID。
+重置后旧 Key 失效，删除后该 Key 失效；外部程序与使用这个 Key 的 ESP32 都需要新 Key。删除后可重新签发，已有 Key 可直接重置。重置/删除成功返回前已开始的请求可能完成，排队任务仍保留。升级固件中的 Key 时只上传程序，不要格式化短信队列。
 
-Key 绑定稳定的卡片 ID / ICCID，手机号是可编辑标签；更换标签不会把权限转移到另一张卡。API 根据 Key 选卡，不允许通过传入别人的卡片 ID 操作其他卡。
+Key 绑定稳定的卡片 ID。手机号在平台内唯一；初次设备接入会补全并绑定 ICCID，后续不能用此 Key 接入另一张 ICCID 的卡。运营商不一定提供本机号码，因此平台无法证明手填手机号与实体 SIM 一致，请自行核对。
+
+已有电话卡直接进入「API Key」管理，无需重复添加。此前生成的短期配对码不是此 Key，不要填到新固件中。
 
 ## 2. 认证与地址
 
@@ -24,15 +26,9 @@ Content-Type: application/json
 
 对外接口前缀为 `/api/v1/sim`。不需要登录 Cookie、TOTP 或 CSRF 请求头。Key 不支持放在 URL 查询参数中，不要把它写入前端公开代码、URL 或日志。一个 Key 可以读取、发送、取消和删除该卡的短信，请仅交给可信调用程序。
 
-三类凭据分别使用：
+手机号 API Key 同时用于 `/api/v1/sim…` 和 `/api/device…`；后者需先激活设备。Key 不能登录管理页面、签发其他 Key、修改账号或访问其他手机号。管理接口仍使用登录会话 + TOTP，写请求需要 Origin 和 CSRF。
 
-| 用途 | 接口 | 认证 |
-| --- | --- | --- |
-| 外部程序操作某张卡 | `/api/v1/sim…` | 页面手动签发的手机号 API Key |
-| ESP32 上报、领取和回执 | `/api/device…` | 配对注册返回的设备 Key |
-| 管理页面、签发/重置/删除 Key | `/api/sims…` 等 | 登录会话 + TOTP；写请求需要 Origin 和 CSRF |
-
-这些凭据不能互相替代。对外 Key 无权签发 Key、访问其他卡片、修改账号或通知通道。设备 Key 保持原有固件协议，因此无需为本次更新重新烧录。
+旧版设备凭据暂保留兼容，旧配对接口不用于新流程。旧卡使用新固件激活后，其旧设备凭据会失效，后续统一使用手机号 Key。
 
 ## 3. 对外接口一览
 
@@ -97,7 +93,7 @@ curl -X POST "$SMSBOT_URL/api/v1/sim/messages/outgoing" \
 | `idempotency_key` | 是 | 本次业务请求的 UUID；重试同一请求必须保持不变 |
 | `retry_of` | 否 | 同一卡片失败或结果未知记录的 ID，用于显式创建一次新的发送 |
 
-不要传入 `sim_id`：卡片由 Key 确定。成功响应：`{"id":"短信UUID"}`。此时仅表示已保存任务，ESP32 默认每 1 秒领取一次，并不表示已经发出。未绑定有效设备返回 400；设备暂时离线但仍绑定时允许排队。
+不要传入 `sim_id`：卡片由 Key 确定。成功响应：`{"id":"短信UUID"}`。此时仅表示已保存任务，ESP32 默认每 1 秒领取一次，并不表示已经发出。设备未接入或离线时也允许排队，只有接入正确 SIM 的设备才能实际发送。
 
 同一卡片、同一个幂等 UUID、同一内容重复提交只返回原 ID；修改内容则返回 409。重置、删除后重新签发 Key，甚至删除短信记录后，原幂等标识依然保留，避免重试重复发送。新短信必须使用新 UUID。短信以 UCS2 发送：单片 70 字符，长短信每片 67 字符，最多 10 片，可能产生多条计费。
 
@@ -161,8 +157,8 @@ print(call('/messages/outgoing/' + message['id']))
 
 | HTTP | 处理方式 |
 | --- | --- |
-| 400 | 检查设备绑定或 `retry_of` |
-| 401 | 缺少/无效/已重置/已删除 Key，或误用了设备 Key |
+| 400 | 检查 `retry_of` |
+| 401 | 缺少/无效/已重置/已删除 Key；外部接口不接受旧版设备 Key |
 | 403 | 管理页面写请求的 Origin/CSRF 校验失败 |
 | 404 | 记录不存在、已删除或不属于该 Key 对应卡片 |
 | 409 | 幂等内容冲突、状态不允许操作或转发正在执行 |
@@ -181,6 +177,18 @@ print(call('/messages/outgoing/' + message['id']))
 | POST | `/api/sims/{sim_id}/api-key/reset` | 替换现有 Key，返回新明文；未签发则 409 |
 | DELETE | `/api/sims/{sim_id}/api-key` | 删除 Key，返回 `ok`；重复删除仍成功 |
 
-设备协议保持原样：`POST /api/device/register` 使用配对码、稳定 `request_id`、`hardware_id` 和 `iccid` 注册，返回设备 Key。之后设备以该 Key 调用 `/heartbeat`、`/incoming`、`/outgoing/claim?iccid=…`、`/outgoing/{id}/result`。无待发送任务时 claim 返回 204；结果回执需包含领取时的 `attempt_id`、`lease_token`、`iccid` 和 `status`。设备会自行重试和持久化，完整配置见 [烧录流程](../firmware/烧录流程.md)。
+### 设备激活（永久 Key）
 
-登录后可读取 `/api/openapi.json` 查看全部请求字段定义。数据库升级新增 `V3__sim_api_keys.sql`，启动前执行 `python -m app.migrate`；容器启动流程自动执行迁移。旧版本 V1/V2 不需要修改。
+`POST /api/device/activate` 使用同一个 `Authorization: Bearer <手机号API Key>`，请求：
+
+```json
+{"hardware_id":"ESP32-MAC-ADDRESS","iccid":"8986001234567890123","firmware_version":"0.2.0","modem_version":"SIM7670G"}
+```
+
+`hardware_id` 为 6–128 字符，`iccid` 为 10–32 位数字，两个版本字段可省略。成功返回 `device_id`、`sim_id`、`poll_interval_ms`、`heartbeat_interval_ms`，不会签发第二个 Key。同一设备和 ICCID 重复激活安全，不受时间限制。不同 ICCID、已被其他手机号使用的卡、未解绑的另一台设备返回 409。
+
+激活后以同一 Key 调用 `POST /api/device/heartbeat`、`/incoming`、`/outgoing/claim?iccid=…`、`/outgoing/{id}/result`。无待发任务时 claim 返回 204；结果回执需领取时的 `attempt_id`、`lease_token`、`iccid` 和 `status`。这些动作由固件完成，见 [烧录流程](../firmware/烧录流程.md)。
+
+添加手机号的管理接口为 `POST /api/sims`，请求 `{"name":"我的卡","phone_number":"+8613800000000"}`，返回 `sim_id`、`name`、`phone_number` 和仅本次可见的 `api_key`。重复号码返回 409；已有号码的 Key 管理接口见上表。
+
+登录后可读取 `/api/openapi.json` 查看全部请求字段定义。本次数据库升级新增 `V4__preprovisioned_phones.sql`（此前 V3 已引入 Key 表），启动前执行 `python -m app.migrate`；容器启动流程自动执行迁移。旧版本 V1/V2/V3 不需要修改。若历史数据中存在重复手机号，需要先修正重复号码再迁移；号码唯一性比较忽略非数字字符，不会自动合并或删除历史短信。

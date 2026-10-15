@@ -1,19 +1,18 @@
 import json
 import logging
-import signal
-import threading
 from uuid import uuid4
 from .db import engine, one, run
 from .security import decrypt
 from .channels import deliver, DeliveryError
 
 log = logging.getLogger('smsbot.worker')
-stop = threading.Event()
 DELAYS = [10, 30, 120, 600, 1800]
 
 
 def maintenance():
     with engine().begin() as db:
+        if not one(db, 'SELECT pg_try_advisory_xact_lock(7367281303) AS ok')['ok']:
+            return
         run(db, '''UPDATE outgoing_sms SET status='unknown',last_error='设备回执超时，未自动重发'
             WHERE status='leased' AND id IN (SELECT outgoing_id FROM send_attempts
             WHERE phase IN ('claimed','submitting') AND lease_expires_at<now())''')
@@ -80,25 +79,8 @@ def finish(job, status, error):
             id=job['id'], token=job['lease_token'])
 
 
-def main():
-    logging.basicConfig(level=logging.INFO)
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, lambda *_: stop.set())
-    tick = 0
-    while not stop.is_set():
-        try:
-            if tick % 30 == 0:
-                maintenance()
-            job = claim_job()
-            if job:
-                process(job)
-            else:
-                stop.wait(1)
-            tick += 1
-        except Exception as exc:
-            log.error('Worker cycle failed (%s)', type(exc).__name__)
-            stop.wait(5)
-
-
-if __name__ == '__main__':
-    main()
+def forward_once():
+    """One bounded unit of work; scheduling is owned by FastAPI."""
+    job = claim_job()
+    if job:
+        process(job)

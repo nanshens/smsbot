@@ -129,7 +129,7 @@ int api(const String &path, JsonDocument &body, JsonDocument &result, bool authe
   http.end();
   if (status>=200 && status<300) backoff=1000;
   else { backoff=min(backoff*2,60000U); nextNetwork=millis()+backoff+esp_random()%500; }
-  if(status==401 || status==409) lastError="Platform rejected device identity/SIM; check pairing";
+  if(status==401 || status==409) lastError="Platform rejected device identity/SIM; check phone API key";
   return status;
 }
 
@@ -140,23 +140,16 @@ bool persistIdentity() {
 }
 
 bool registerDevice() {
-  if(identity["api_key"].is<String>()) return identity["iccid"].as<String>()==iccid;
-  // Preserve exact registration request across restarts, including transient modem version.
-  if(!identity["registration"].is<JsonObject>()) {
-    JsonObject reg=identity["registration"].to<JsonObject>();
-    reg["request_id"]=uuid(); reg["pairing_code"]=PAIRING_CODE;
-    reg["hardware_id"]=WiFi.macAddress(); reg["iccid"]=iccid; reg["name"]=DEVICE_NAME;
-    reg["firmware_version"]="0.1.0"; reg["modem_version"]="SIM7670G";
-    if(!persistIdentity()) return false;
-  }
-  JsonDocument body,result; body.set(identity["registration"]);
-  int status=api("/device/register",body,result,false);
-  if(status!=200) return false;
-  identity["api_key"]=result["api_key"]; identity["device_id"]=result["device_id"];
-  identity["iccid"]=iccid; identity.remove("registration");
+  JsonDocument body,result;
+  body["hardware_id"]=WiFi.macAddress(); body["iccid"]=iccid;
+  body["firmware_version"]="0.2.0"; body["modem_version"]="SIM7670G";
+  identity["api_key"]=PHONE_API_KEY;
+  if(api("/device/activate",body,result)!=200) return false;
+  identity["device_id"]=result["device_id"]; identity["iccid"]=iccid;
+  identity["configured_key_hash"]=hash(PHONE_API_KEY); identity.remove("registration");
   pollMs=max(1000U,result["poll_interval_ms"].as<unsigned>());
   heartbeatMs=max(10000U,result["heartbeat_interval_ms"].as<unsigned>());
-  Serial.println("Registration confirmed; storing device identity");
+  Serial.println("Device activated with permanent phone API key");
   return persistIdentity();
 }
 
@@ -344,6 +337,10 @@ void setup() {
     outgoing["result"]["error_message"]="Device rebooted; persisted state determines safe recovery";
     save("/outgoing.json",outgoing);
   }
+  if(identity["configured_key_hash"].as<String>()!=hash(PHONE_API_KEY)) {
+    identity.remove("device_id"); identity["api_key"]=PHONE_API_KEY;
+    if(!persistIdentity()) return;
+  }
   pinMode(MODEM_DTR,OUTPUT); digitalWrite(MODEM_DTR,LOW);
   pinMode(MODEM_RESET,OUTPUT); digitalWrite(MODEM_RESET,HIGH);
   pinMode(MODEM_PWRKEY,OUTPUT); digitalWrite(MODEM_PWRKEY,LOW);
@@ -359,7 +356,7 @@ void loop() {
     String input=Serial.readStringUntil('\n'); input.trim();
     if(input=="PAIR RESET") {
       if(inbox["groups"].size() || !outgoing["id"].isNull()) Serial.println("Pending records exist; restore original SIM and sync first");
-      else { identity.clear(); persistIdentity(); Serial.println("Identity reset; configure a fresh pairing code and reboot"); }
+      else { identity.clear(); persistIdentity(); Serial.println("Identity reset; configure the phone API key and reboot"); }
     }
   }
   unsigned long now=millis();
@@ -371,7 +368,7 @@ void loop() {
     scanInbox(); nextScan=millis()+5000;
   }
   if(WiFi.status()!=WL_CONNECTED || time(nullptr)<1700000000) { delay(20); return; }
-  if(!identity["api_key"].is<String>()) {
+  if(!identity["device_id"].is<String>()) {
     if((long)(now-nextNetwork)>=0) {
       if(registerDevice()) backoff=1000; else backoff=min(backoff*2,60000U);
       nextNetwork=millis()+backoff+esp_random()%500;
