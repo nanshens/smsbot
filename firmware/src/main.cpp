@@ -11,8 +11,10 @@
 #include "sms_codec.h"
 #if __has_include("config.local.h")
 #include "config.local.h"
+#define SMSBOT_CONFIG_SOURCE "config.local.h"
 #else
 #include "config.example.h"
+#define SMSBOT_CONFIG_SOURCE "config.example.h (template)"
 #endif
 
 HardwareSerial modem(1);
@@ -23,6 +25,20 @@ String iccid, lastError;
 bool storageFault = false, ready = false;
 unsigned long nextNetwork = 0, nextScan = 0, nextHeartbeat = 0, nextPoll = 0, nextModem = 0;
 unsigned pollMs = 1000, heartbeatMs = 30000, backoff = 1000;
+int lastHttpStatus = 0;
+
+void printStatus() {
+  static unsigned long previous=0;
+  if(millis()-previous<5000 || !Serial) return;
+  previous=millis();
+  Serial.println("[config] " SMSBOT_CONFIG_SOURCE);
+  Serial.printf("[status] uptime=%lus storage=%s modem=%s wifi=%s ntp=%s activated=%s http=%d\n",
+      millis()/1000, storageFault?"ERROR":"ok", ready?"ready":"waiting",
+      WiFi.status()==WL_CONNECTED?"connected":"disconnected",
+      time(nullptr)>=1700000000?"ready":"waiting",
+      identity["device_id"].is<String>()?"yes":"no",lastHttpStatus);
+  if(lastError.length()) Serial.println("[last-error] "+lastError);
+}
 
 // Use the SMS service-centre clock: NTP may jump after an offline boot.
 time_t messageTime(const String &stamp) {
@@ -91,12 +107,17 @@ String command(const String &cmd, unsigned timeout=3000, bool prompt=false) {
 }
 
 String readIccid() {
-  String answer=command("AT+ICCID");
-  if (answer.indexOf("OK")<0) answer=command("AT+CCID");
-  String digits;
-  for (size_t i=0;i<answer.length();++i) {
-    if (isDigit(answer[i])) digits+=answer[i];
-    else { if (digits.length()>=10 && digits.length()<=32) return digits; digits=""; }
+  // SIM767XX documents AT+CICCID; retain alternatives for modem revisions.
+  const char *queries[]={"AT+CICCID","AT+ICCID","AT+CCID"};
+  for(const char *query:queries) {
+    String answer=command(query,6000); // Manual allows up to 5 seconds.
+    if(answer.indexOf("\r\nOK\r\n")<0) continue;
+    String digits;
+    for(size_t i=0;i<=answer.length();++i) {
+      char c=i<answer.length()?answer[i]:'\n';
+      if(isDigit(c)) digits+=c;
+      else { if(digits.length()>=10 && digits.length()<=32) return digits; digits=""; }
+    }
   }
   return "";
 }
@@ -105,13 +126,15 @@ bool initializeModem() {
   if (command("AT",1000).indexOf("OK")<0) {
     digitalWrite(MODEM_PWRKEY,LOW); delay(100); digitalWrite(MODEM_PWRKEY,HIGH); delay(1000); digitalWrite(MODEM_PWRKEY,LOW);
     delay(5000);
-    if (command("AT",2000).indexOf("OK")<0) return false;
+    if (command("AT",2000).indexOf("OK")<0) { lastError="Modem did not respond to AT"; return false; }
   }
   command("ATE0"); command("AT+CMEE=2"); command("AT+CSCLK=0");
   if (command("AT+CPIN?").indexOf("READY")<0) { lastError="SIM not ready (check PIN/card)"; return false; }
-  if (command("AT+CMGF=0").indexOf("OK")<0 || command("AT+CPMS=\"SM\",\"SM\",\"SM\"").indexOf("OK")<0) return false;
+  if (command("AT+CMGF=0").indexOf("OK")<0 || command("AT+CPMS=\"SM\",\"SM\",\"SM\"").indexOf("OK")<0) { lastError="Modem SMS mode/storage setup failed"; return false; }
   command("AT+CNMI=2,1,0,0,0");
   iccid=readIccid();
+  if(iccid.length()<10) lastError="Cannot read SIM ICCID";
+  else lastError="";
   return iccid.length()>=10;
 }
 
@@ -127,6 +150,7 @@ int api(const String &path, JsonDocument &body, JsonDocument &result, bool authe
     if (deserializeJson(result,http.getStream())) status=-2;
   }
   http.end();
+  lastHttpStatus=status;
   if (status>=200 && status<300) backoff=1000;
   else { backoff=min(backoff*2,60000U); nextNetwork=millis()+backoff+esp_random()%500; }
   if(status==401 || status==409) lastError="Platform rejected device identity/SIM; check phone API key";
@@ -323,11 +347,14 @@ void heartbeat() {
 }
 
 void setup() {
-  Serial.begin(115200); delay(500); Serial.println("SMSBot 0.1.0 boot");
+  Serial.begin(115200);
+  unsigned long serialStart=millis();
+  while(!Serial && millis()-serialStart<3000) delay(10);
+  Serial.println("SMSBot 0.2.1 boot");
   preferences.begin("smsbot",false);
   String saved=preferences.getString("identity","");
-  if(saved.length() && deserializeJson(identity,saved)) { storageFault=true; Serial.println("NVS identity corrupt; stop"); return; }
-  if(!LittleFS.begin(false)) { storageFault=true; Serial.println("Filesystem missing. First install: pio run -t uploadfs. Never format an existing queue."); return; }
+  if(saved.length() && deserializeJson(identity,saved)) { storageFault=true; lastError="NVS identity corrupt; stop"; Serial.println(lastError); return; }
+  if(!LittleFS.begin(false)) { storageFault=true; lastError="Filesystem missing. First install: pio run -t uploadfs. Never format an existing queue."; Serial.println(lastError); return; }
   load("/inbox.json",inbox); load("/outgoing.json",outgoing);
   if(inbox["groups"].isNull()) inbox["groups"].to<JsonArray>();
   if(outgoing["id"].is<String>() && outgoing["stage"].as<String>()!="result") {
@@ -350,6 +377,7 @@ void setup() {
 }
 
 void loop() {
+  printStatus();
   if(storageFault) { delay(1000); return; }
   // A physical serial console may reset identity only when no local work is pending.
   if(Serial.available()) {
