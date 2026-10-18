@@ -45,7 +45,7 @@ python -m pip install -r backend/requirements.lock
 python -m pip install --no-deps -e backend
 ```
 
-Linux 安装 psycopg2 时可能需要编译器与 PostgreSQL 开发库（Debian 的 `gcc libpq-dev`）。Dockerfile 已包含构建环境。
+Linux 安装 psycopg2 时需要编译器、C 标准库头文件与 PostgreSQL 开发库（Debian 的 `build-essential libpq-dev`）。Dockerfile 已包含构建环境。
 
 复制 `.env.example` 为 `.env`，填写数据库地址、账号、密码。本机数据库地址例如 `postgresql+psycopg://127.0.0.1:5432/smsbot`。生成两项独立密钥：
 
@@ -88,7 +88,7 @@ Vite 开发服务是 HTTP，不能直接给此固件使用。设备需要可达�
 
 ```sh
 docker build -t smsbot:local .
-docker run -d --name smsbot --env-file .env -p 8080:8080 -p 8000:8000 smsbot:local
+docker run -d --name smsbot --env-file .env -p 3434:8080 -p 3444:8000 smsbot:local
 docker exec -it smsbot python -m app.cli create-admin --username admin
 ```
 

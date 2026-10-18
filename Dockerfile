@@ -8,7 +8,8 @@ RUN pnpm build
 
 FROM python:3.13-slim-bookworm AS wheels
 WORKDIR /build
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev && rm -rf /var/lib/apt/lists/*
+# psycopg2 needs libc headers (including assert.h), not just the gcc executable.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libpq-dev && rm -rf /var/lib/apt/lists/*
 COPY backend/requirements.lock ./requirements.lock
 RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.lock
 
