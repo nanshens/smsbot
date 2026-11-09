@@ -103,6 +103,16 @@ def test_same_body_different_events_are_preserved(paired):
     assert client.get('/api/incoming').json()['total']==2
 
 
+def test_successful_device_poll_restores_online_status(paired):
+    client, identity, payload = paired
+    with engine().begin() as db:
+        run(db, "UPDATE devices SET last_seen_at=now()-interval '3 minutes'")
+    assert client.get('/api/sims').json()[0]['online'] is False
+    route = '/api/device/outgoing/claim?iccid=' + payload['iccid']
+    assert client.post(route, headers=headers(identity)).status_code == 204
+    assert client.get('/api/sims').json()[0]['online'] is True
+
+
 def test_sim_scope_and_revocation(paired):
     client,identity,payload=paired
     data=message(identity,'8986000000000000000')

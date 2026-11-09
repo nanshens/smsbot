@@ -143,6 +143,10 @@ def incoming(body: Incoming, request: Request, db=Depends(connection, scope="fun
 def claim(request: Request, response: Response, iccid: str, db=Depends(connection, scope="function")):
     dev = device(db, request)
     card_check(dev, iccid)
+    # A successful authenticated poll proves the device is reachable even if
+    # modem work delays its separate heartbeat. Limit writes to once per 30s.
+    run(db, "UPDATE devices SET last_seen_at=now() WHERE id=:id AND last_seen_at<now()-interval '30 seconds'",
+        id=dev['id'])
     # Serialize claims for one device, not the whole queue.
     run(db, 'SELECT id FROM devices WHERE id=:id FOR UPDATE', id=dev['id'])
     if one(db, "SELECT id FROM send_attempts WHERE device_id=:id AND phase IN ('claimed','submitting')", id=dev['id']):
