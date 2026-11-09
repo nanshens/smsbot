@@ -1,6 +1,6 @@
 # SMSBot
 
-自托管短信工作台：LILYGO T-SIM7670G-S3 收发短信，Python 后端保存至 PostgreSQL，自动转发到邮件、Bark 和 PushDeer。React 管理端支持手机与桌面。
+自托管短信工作台：LILYGO T-SIM7670G-S3 收发短信，Python 后端保存至 PostgreSQL，自动转发到邮件、Bark、PushDeer 和 Quicker。React 管理端支持手机与桌面。
 
 ## 功能
 
@@ -8,7 +8,7 @@
 - 先添加手机号并签发永久 API Key，设备随时接入、Key 摘要存储、手动重置/删除、按 ICCID 管理电话卡与状态心跳。
 - 每个手机号最多一个永久 API Key，设备和外部程序共用；页面手动签发、重置、删除，仅能操作对应卡片。
 - 收信持久化、事件去重、分页/搜索/筛选、单条及批量删除、按卡绑定转发通道。
-- SMTP（QQ 邮箱/Gmail/自定义）、Bark、PushDeer；加密凭据、测试通知与持久化重试队列。
+- SMTP（QQ 邮箱/Gmail/自定义）、Bark、PushDeer、Quicker；加密凭据、关键词筛选、正则截取、测试通知与持久化重试队列。
 - 发信排队、默认 1 秒轮询、原子领取、幂等回执、超时结果未知、人工重发、取消和删除。
 - 固件 Wi-Fi + HTTPS、PDU 收发、UCS2 分段、接收分片重组、LittleFS 队列、NVS 身份与重启恢复。
 - AQ-DBMigration SQL 迁移，互斥锁和 SQL/历史记录统一事务。
@@ -117,6 +117,8 @@ FastAPI lifespan 启动 APScheduler，退出时停止调度并等待正在执行
 5. 发信使用 UCS2，最多 670 个 BMP 字符（最多 10 片），暂不支持 emoji。收信解析支持 GSM7/UCS2，见固件说明中的缓存与重组限制。
 
 SMTP 要求 SSL/TLS 或 STARTTLS。QQ 邮箱使用授权码；Gmail 使用账号支持的应用密码；本版不包含 Gmail OAuth 授权流程。Bark 配置根地址和设备 Key，PushDeer 配置根地址和 PushKey。
+
+关键词筛选、正文截取、Quicker 配置及已部署 Docker 更新步骤见 [短信转发规则与 Quicker](docs/短信转发规则与Quicker.md)。
 
 默认禁止通知连接内网地址，自建内网服务需由部署者设置 `ALLOW_PRIVATE_NOTIFICATIONS=true`。只有管理员可以配置通道。
 

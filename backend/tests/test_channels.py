@@ -58,3 +58,32 @@ def test_smtp_uses_starttls_and_checks_recipients(monkeypatch):
 
 def test_private_notification_address_rejected(system):
     with pytest.raises(channels.DeliveryError): channels.public_host('127.0.0.1')
+
+
+def test_keyword_filter_and_ordered_extraction():
+    config = channels.validate_channel('bark', {'server': 'https://api.day.app',
+        'keywords': ['验证码', 'verify code'], 'content_mode': 'extract',
+        'patterns': [r'不存在(\d+)', r'验证码[:：]\s*(\d+)', r'(\d+)']}, {'key': 'secret'})
+    assert channels.matches_keywords(config, '您的验证码：123456')
+    assert channels.matches_keywords(config, 'Your VERIFY CODE is 123456')
+    assert not channels.matches_keywords(config, '普通消息')
+    assert channels.delivery_content(config, '您的验证码：123456', 'legacy') == '123456'
+    assert channels.delivery_content(config, '无可提取内容', 'legacy') is None
+    assert channels.delivery_content({'content_mode': 'full'}, '原短信', 'legacy') == '原短信'
+    assert channels.delivery_content({}, '原短信', 'legacy') == 'legacy'
+
+
+def test_quicker_json_and_response(monkeypatch):
+    observed = []
+    def handle(request):
+        observed.append(request)
+        return httpx.Response(200, json={'isSuccess': True, 'successCount': 1})
+    real = httpx.Client
+    monkeypatch.setattr(channels, 'public_host', lambda _: None)
+    monkeypatch.setattr(channels.httpx, 'Client', lambda **kwargs: real(transport=httpx.MockTransport(handle), **kwargs))
+    config = {'toUser': 'someone@example.com', 'operation': 'PASTE', 'wait': True, 'maxWaitMs': 3000}
+    channels.deliver('quicker', config, {'code': 'private-code'}, '标题', '123456')
+    assert str(observed[0].url) == 'https://push.getquicker.cn/to/quicker'
+    assert json.loads(observed[0].content)['data'] == '123456'
+    assert json.loads(observed[0].content)['code'] == 'private-code'
+    assert 'private-code' not in str(observed[0].url)

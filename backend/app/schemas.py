@@ -53,7 +53,7 @@ class Outgoing(Input):
 
 class Channel(Input):
     name: str = Field(min_length=1, max_length=100)
-    type: Literal['smtp', 'bark', 'pushdeer']
+    type: Literal['smtp', 'bark', 'pushdeer', 'quicker']
     enabled: bool = True
     config: dict
     credentials: dict | None = None

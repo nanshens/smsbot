@@ -3,7 +3,7 @@ import logging
 from uuid import uuid4
 from .db import engine, one, run
 from .security import decrypt
-from .channels import deliver, DeliveryError
+from .channels import deliver, delivery_content, DeliveryError
 
 log = logging.getLogger('smsbot.worker')
 DELAYS = [10, 30, 120, 600, 1800]
@@ -59,6 +59,10 @@ def process(job):
                 return
             title = f"{data['name']} · 新短信"
             content = f"电话卡：{data['name']} {data['phone_number'] or ''}\n发件人：{data['sender']}\n接收时间：{data['received_at'].isoformat()}\n\n{data['body']}"
+            content = delivery_content(data['config'], data['body'], content)
+            if content is None:
+                finish(job, 'cancelled', '短信未匹配截取规则')
+                return
             try:
                 deliver(data['type'], data['config'], json.loads(decrypt(data['credentials_encrypted'])), title, content)
             except DeliveryError as exc:

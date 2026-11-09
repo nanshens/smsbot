@@ -7,6 +7,7 @@ from .db import connection, one, rows, run
 from .config import settings
 from .schemas import Registration, Heartbeat, Incoming, Result, Activation
 from .security import device, throttle, digest, fingerprint, encrypt, decrypt, audit
+from .channels import matches_keywords
 
 router = APIRouter(prefix='/api/device', tags=['device'])
 
@@ -128,9 +129,11 @@ def incoming(body: Incoming, request: Request, db=Depends(connection, scope="fun
     if not record:
         old = one(db, 'SELECT id FROM incoming_sms WHERE device_id=:device AND event_id=:event', device=dev['id'], event=body.event_id)
         return {'id': old['id'], 'duplicate': True}
-    channels = rows(db, '''SELECT c.id FROM notification_channels c JOIN sim_channel_bindings b ON b.channel_id=c.id
+    channels = rows(db, '''SELECT c.id,c.config FROM notification_channels c JOIN sim_channel_bindings b ON b.channel_id=c.id
         WHERE b.sim_id=:sim AND c.enabled AND c.deleted_at IS NULL''', sim=dev['sim_id'])
     for channel in channels:
+        if not matches_keywords(channel['config'], body.body):
+            continue
         run(db, 'INSERT INTO forwarding_jobs(id,incoming_id,channel_id) VALUES (:id,:incoming,:channel)',
             id=uuid4(), incoming=record['id'], channel=channel['id'])
     return {'id': record['id'], 'duplicate': False}

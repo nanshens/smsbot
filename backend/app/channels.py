@@ -1,12 +1,13 @@
 import ipaddress
 import json
+import re
 import smtplib
 import socket
 import ssl
 from email.message import EmailMessage
 from urllib.parse import urlsplit
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .config import settings
 
 
@@ -29,25 +30,81 @@ class PushConfig(BaseModel):
     server: str = Field(min_length=8, max_length=500)
 
 
+class Rules(BaseModel):
+    keywords: list[str] = Field(default_factory=list, max_length=30)
+    content_mode: str = Field(default='full', pattern='^(full|extract)$')
+    patterns: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator('keywords', 'patterns')
+    @classmethod
+    def check_items(cls, values):
+        if any(not isinstance(value, str) or not value.strip() or len(value) > 256 for value in values):
+            raise ValueError('规则不能为空或过长')
+        return values
+
+
+class QuickerConfig(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    toUser: str = Field(min_length=1, max_length=254)
+    toDevice: str = Field(default='', max_length=100)
+    operation: str = Field(default='PASTE', min_length=1, max_length=50)
+    action: str = Field(default='', max_length=200)
+    wait: bool = True
+    maxWaitMs: int = Field(default=3000, ge=1, le=30000)
+
+
+def matches_keywords(config, body):
+    words = config.get('keywords') or []
+    return not words or any(word.casefold() in body.casefold() for word in words)
+
+
+def delivery_content(config, body, legacy_content):
+    mode = config.get('content_mode')
+    if mode is None:
+        return legacy_content
+    if mode == 'full':
+        return body
+    for pattern in config.get('patterns', []):
+        match = re.search(pattern, body[:16000])
+        if match:
+            value = match.group(1) if match.lastindex else match.group(0)
+            if value:
+                return value
+    return None
+
+
 def validate_channel(kind, config, credentials):
-    schema = SMTPConfig if kind == 'smtp' else PushConfig
-    parsed = schema.model_validate(config).model_dump()
+    if kind not in ('smtp', 'bark', 'pushdeer', 'quicker'):
+        raise ValueError('通道类型无效')
+    raw = dict(config)
+    rules = Rules.model_validate({key: raw.pop(key) for key in ('keywords', 'content_mode', 'patterns') if key in raw}).model_dump()
+    if rules['content_mode'] == 'extract' and not rules['patterns']:
+        raise ValueError('截取模式需要正则表达式')
+    for pattern in rules['patterns']:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ValueError('正则表达式无效') from exc
+    schema = SMTPConfig if kind == 'smtp' else QuickerConfig if kind == 'quicker' else PushConfig
+    parsed = schema.model_validate(raw).model_dump()
     if kind == 'smtp':
         for field in ('sender', 'recipient'):
             if '@' not in parsed[field] or any(c in parsed[field] for c in '\r\n'):
                 raise ValueError('邮箱格式不正确')
         host = parsed['host']
-    else:
+    elif kind != 'quicker':
         url = urlsplit(parsed['server'])
         if url.scheme != 'https' or not url.hostname or url.username or url.password or url.query or url.fragment:
             raise ValueError('推送服务需要不含凭据和查询参数的 HTTPS 地址')
         host = url.hostname
+    else:
+        host = 'push.getquicker.cn'
     if not host or '/' in host or any(c.isspace() for c in host):
         raise ValueError('服务地址无效')
-    required = 'password' if kind == 'smtp' else 'key'
+    required = 'password' if kind == 'smtp' else 'code' if kind == 'quicker' else 'key'
     if not credentials or set(credentials) != {required} or not isinstance(credentials[required], str) or not 1 <= len(credentials[required]) <= 1024:
         raise ValueError(f'请提供 {required}')
-    return parsed
+    return {**parsed, **rules}
 
 
 def public_host(host):
@@ -83,10 +140,21 @@ def deliver(kind, config, credentials, title, content):
                 if client.send_message(message):
                     raise DeliveryError('收件人被邮件服务拒绝')
             return
-        base = config['server'].rstrip('/')
+        base = 'https://push.getquicker.cn/to/quicker' if kind == 'quicker' else config['server'].rstrip('/')
         public_host(urlsplit(base).hostname)
         with httpx.Client(timeout=20, follow_redirects=False, trust_env=False) as client:
-            if kind == 'bark':
+            if kind == 'quicker':
+                payload = {key: config[key] for key in ('toUser', 'operation', 'wait', 'maxWaitMs')}
+                payload.update({'code': credentials['code'], 'data': content})
+                for key in ('toDevice', 'action'):
+                    if config[key]:
+                        payload[key] = config[key]
+                response = client.post(base, json=payload)
+                response.raise_for_status()
+                result = response.json()
+                if result.get('isSuccess') is not True or result.get('successCount', 0) < 1:
+                    raise DeliveryError('Quicker 返回投递失败')
+            elif kind == 'bark':
                 response = client.post(base + '/push', json={'device_key': credentials['key'], 'title': title, 'body': content, 'group': 'SMSBot'})
                 response.raise_for_status()
                 if response.json().get('code') != 200:
