@@ -33,6 +33,11 @@ class Bindings(Input):
     channel_ids: list[UUID] = Field(max_length=20)
 
 
+class OfflineAlert(Input):
+    channel_id: UUID | None = None
+    after_hours: int = Field(default=1, ge=1, le=720)
+
+
 class Outgoing(Input):
     sim_id: UUID
     recipient: str = Field(pattern=r'^\+?[0-9]{3,20}$')

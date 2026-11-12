@@ -113,6 +113,60 @@ def test_successful_device_poll_restores_online_status(paired):
     assert client.get('/api/sims').json()[0]['online'] is True
 
 
+def test_offline_alert_once_per_outage_and_rearms_after_recovery(paired, monkeypatch):
+    from app import worker
+    client, identity, payload = paired
+    sid = identity['sim_id']
+    channel = add_channel(client, sid)
+    route = f'/api/sims/{sid}/offline-alert'
+    assert client.put(route, json={'channel_id': channel, 'after_hours': 1}).status_code == 200
+    assert client.get('/api/sims').json()[0]['offline_channel_id'] == channel
+    assert client.put(route, json={'channel_id': channel, 'after_hours': 0}).status_code == 422
+    observed = []
+    monkeypatch.setattr(worker, 'deliver', lambda kind, config, credentials, title, content: observed.append((title, content)))
+    with engine().begin() as db:
+        run(db, "UPDATE devices SET last_seen_at=now()-interval '2 hours'")
+    worker.offline_alert_once()
+    worker.offline_alert_once()
+    assert len(observed) == 1
+    assert '设备离线' in observed[0][0]
+    with engine().begin() as db:
+        assert one(db, "SELECT status FROM device_offline_notifications")['status'] == 'sent'
+    assert client.post('/api/device/outgoing/claim?iccid='+payload['iccid'], headers=headers(identity)).status_code == 204
+    with engine().begin() as db:
+        run(db, "UPDATE devices SET last_seen_at=now()-interval '2 hours 1 second'")
+    worker.offline_alert_once()
+    assert len(observed) == 2
+    assert client.put(route, json={'channel_id': None, 'after_hours': 1}).status_code == 200
+
+
+def test_offline_alert_retries_without_creating_duplicate_event(paired, monkeypatch):
+    from app import worker
+    from app.channels import DeliveryError
+    client, identity, _ = paired
+    channel = add_channel(client, identity['sim_id'])
+    assert client.put(f"/api/sims/{identity['sim_id']}/offline-alert",
+                      json={'channel_id': channel, 'after_hours': 1}).status_code == 200
+    with engine().begin() as db:
+        run(db, "UPDATE devices SET last_seen_at=now()-interval '2 hours'")
+    def fail(*args):
+        raise DeliveryError('通知服务暂不可用')
+    monkeypatch.setattr(worker, 'deliver', fail)
+    worker.offline_alert_once()
+    with engine().begin() as db:
+        alert = one(db, 'SELECT status,attempts,last_error FROM device_offline_notifications')
+        assert alert['status'] == 'pending' and alert['attempts'] == 1
+        assert alert['last_error'] == '通知服务暂不可用'
+        run(db, 'UPDATE device_offline_notifications SET next_attempt_at=now()')
+    sent = []
+    monkeypatch.setattr(worker, 'deliver', lambda *args: sent.append(args))
+    worker.offline_alert_once()
+    assert len(sent) == 1
+    with engine().begin() as db:
+        assert one(db, 'SELECT count(*) AS n FROM device_offline_notifications')['n'] == 1
+        assert one(db, 'SELECT status FROM device_offline_notifications')['status'] == 'sent'
+
+
 def test_sim_scope_and_revocation(paired):
     client,identity,payload=paired
     data=message(identity,'8986000000000000000')

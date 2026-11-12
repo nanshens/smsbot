@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Request, HTTPException, Query
 from .db import connection, one, rows, run
 from .security import current, digest, fingerprint, encrypt, decrypt, audit, throttle
-from .schemas import SimEdit, Bindings, Outgoing, Channel
+from .schemas import SimEdit, Bindings, OfflineAlert, Outgoing, Channel
 from .channels import validate_channel, deliver, DeliveryError
 
 router = APIRouter(prefix='/api', tags=['management'])
@@ -37,6 +37,26 @@ def edit_sim(sim_id: UUID, body: SimEdit, request: Request, db=Depends(connectio
     if not run(db, 'UPDATE sim_cards SET name=:name,phone_number=:phone_number,notes=:notes WHERE id=:id', id=sim_id, **body.model_dump()).rowcount:
         raise HTTPException(404, '电话卡不存在')
     audit(db, 'sim.updated', user=user['id'], resource=sim_id)
+    return {'ok': True}
+
+
+@router.put('/sims/{sim_id}/offline-alert')
+def configure_offline_alert(sim_id: UUID, body: OfflineAlert, request: Request,
+                            db=Depends(connection, scope="function")):
+    user = current(db, request)
+    sim = one(db, 'SELECT offline_channel_id,offline_after_hours FROM sim_cards WHERE id=:id FOR UPDATE', id=sim_id)
+    if not sim:
+        raise HTTPException(404, '电话卡不存在')
+    if body.channel_id and not one(db, '''SELECT id FROM notification_channels
+            WHERE id=:id AND enabled AND deleted_at IS NULL''', id=body.channel_id):
+        raise HTTPException(400, '请选择已启用的通知通道')
+    changed = sim['offline_channel_id'] != body.channel_id or sim['offline_after_hours'] != body.after_hours
+    run(db, '''UPDATE sim_cards SET offline_channel_id=:channel,offline_after_hours=:hours,
+        offline_alert_generation=offline_alert_generation+:increment WHERE id=:id''',
+        channel=body.channel_id, hours=body.after_hours, increment=int(changed), id=sim_id)
+    if changed:
+        run(db, "UPDATE device_offline_notifications SET status='cancelled' WHERE sim_id=:id AND status='pending'", id=sim_id)
+    audit(db, 'sim.offline_alert.updated', user=user['id'], resource=sim_id)
     return {'ok': True}
 
 
@@ -254,9 +274,13 @@ def delete_channel(channel_id: UUID, request: Request, db=Depends(connection, sc
     user = current(db, request)
     if one(db, "SELECT id FROM forwarding_jobs WHERE channel_id=:id AND status='processing'", id=channel_id):
         raise HTTPException(409, '通道有转发任务正在执行，请稍后删除')
+    if one(db, "SELECT id FROM device_offline_notifications WHERE channel_id=:id AND status='processing'", id=channel_id):
+        raise HTTPException(409, '通道有离线通知正在发送，请稍后删除')
     run(db, 'UPDATE notification_channels SET deleted_at=now(),enabled=false,credentials_encrypted=:empty WHERE id=:id', id=channel_id, empty=encrypt('{}'))
     run(db, 'DELETE FROM sim_channel_bindings WHERE channel_id=:id', id=channel_id)
     run(db, "UPDATE forwarding_jobs SET status='cancelled' WHERE channel_id=:id AND status IN ('pending','failed')", id=channel_id)
+    run(db, "UPDATE device_offline_notifications SET status='cancelled' WHERE channel_id=:id AND status='pending'", id=channel_id)
+    run(db, 'UPDATE sim_cards SET offline_channel_id=NULL,offline_alert_generation=offline_alert_generation+1 WHERE offline_channel_id=:id', id=channel_id)
     audit(db, 'channel.deleted', user=user['id'], resource=channel_id)
     return {'ok': True}
 

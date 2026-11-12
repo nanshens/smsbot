@@ -92,13 +92,15 @@ docker run -d --name smsbot --env-file .env -p 3434:8080 -p 3444:8000 smsbot:loc
 docker exec -it smsbot python -m app.cli create-admin --username admin
 ```
 
+以后在服务器项目目录运行 `bash update.sh` 即可拉取代码、构建镜像并替换应用容器；脚本使用上面这组端口和根目录 `.env`，不会删除 PostgreSQL 数据库。旧应用容器会被停止并删除；如果实际部署还使用自定义 Docker 网络、挂载或额外环境变量，请先将相同参数补进 `update.sh` 的 `docker run`。
+
 PostgreSQL 使用已有服务或独立容器。数据库地址必须从应用容器可达；同网络数据库容器使用服务名，并给 `docker run` 增加相应 `--network`。也可通过 `-e DATABASE_URL=...` 覆盖文件中的值。
 
 前端端口为 8080，API 为 8000。前端通过 Nginx 同源代理 `/api`。容器等待数据库后启动 Nginx 和 API；API 在开放服务前自动迁移，成功后启动内置定时任务，进程以非 root 用户运行。
 
 ### 内置定时任务
 
-FastAPI lifespan 启动 APScheduler，退出时停止调度并等待正在执行的任务结束。每 1 秒领取一条到期转发任务，每 30 秒处理租约超时、过期会话和临时凭据。同步数据库和通知请求在线程池执行，不阻塞 API 事件循环；同一 job 在本进程内不会重入。
+FastAPI lifespan 启动 APScheduler，退出时停止调度并等待正在执行的任务结束。每 1 秒领取一条到期转发任务，每 30 秒处理离线通知、租约超时、过期会话和临时凭据。同步数据库和通知请求在线程池执行，不阻塞 API 事件循环；同一 job 在本进程内不会重入。
 
 更新已有环境时先安装 `backend/requirements.lock` 中的新依赖，并停止旧版独立 worker。现在只需启动 Uvicorn。默认一个 API 进程；若使用多个进程或副本，每个进程都有调度器，转发领取通过 PostgreSQL 行锁和租约协调，维护任务使用数据库互斥锁。
 
@@ -119,6 +121,8 @@ FastAPI lifespan 启动 APScheduler，退出时停止调度并等待正在执行
 SMTP 要求 SSL/TLS 或 STARTTLS。QQ 邮箱使用授权码；Gmail 使用账号支持的应用密码；本版不包含 Gmail OAuth 授权流程。Bark 配置根地址和设备 Key，PushDeer 配置根地址和 PushKey。
 
 关键词筛选、正文截取、Quicker 配置及已部署 Docker 更新步骤见 [短信转发规则与 Quicker](docs/短信转发规则与Quicker.md)。
+
+每张电话卡可单独启用离线通知，选择通知通道并设置离线小时数；使用方法见 [离线通知](docs/离线通知.md)。
 
 默认禁止通知连接内网地址，自建内网服务需由部署者设置 `ALLOW_PRIVATE_NOTIFICATIONS=true`。只有管理员可以配置通道。
 

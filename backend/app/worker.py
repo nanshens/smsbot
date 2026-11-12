@@ -1,7 +1,7 @@
 import json
 import logging
 from uuid import uuid4
-from .db import engine, one, run
+from .db import engine, one, rows, run
 from .security import decrypt
 from .channels import deliver, delivery_content, DeliveryError
 
@@ -88,3 +88,77 @@ def forward_once():
     job = claim_job()
     if job:
         process(job)
+
+
+def offline_alert_once():
+    """Create and deliver one durable alert for a still-offline device."""
+    with engine().begin() as db:
+        candidates = rows(db, '''SELECT s.id AS sim_id,d.id AS device_id,c.id AS channel_id,
+                   d.last_seen_at AS offline_since,s.offline_alert_generation AS generation
+            FROM sim_cards s JOIN devices d ON d.id=s.device_id
+            JOIN notification_channels c ON c.id=s.offline_channel_id
+            WHERE d.enabled AND d.key_revoked_at IS NULL AND d.last_seen_at IS NOT NULL
+              AND d.last_seen_at <= now()-make_interval(hours => s.offline_after_hours)
+              AND c.enabled AND c.deleted_at IS NULL''')
+        for candidate in candidates:
+            run(db, '''INSERT INTO device_offline_notifications
+                (id,sim_id,device_id,channel_id,offline_since,generation)
+                VALUES (:id,:sim_id,:device_id,:channel_id,:offline_since,:generation)
+                ON CONFLICT (sim_id,offline_since,generation) DO NOTHING''',
+                id=uuid4(), **candidate)
+        run(db, '''UPDATE device_offline_notifications a SET status='cancelled',lease_token=NULL,
+            lease_expires_at=NULL WHERE a.status='pending' AND NOT EXISTS (
+              SELECT 1 FROM sim_cards s JOIN devices d ON d.id=s.device_id
+              JOIN notification_channels c ON c.id=s.offline_channel_id
+              WHERE s.id=a.sim_id AND d.id=a.device_id AND c.id=a.channel_id
+                AND s.offline_alert_generation=a.generation AND d.last_seen_at=a.offline_since
+                AND d.enabled AND d.key_revoked_at IS NULL AND c.enabled AND c.deleted_at IS NULL
+                AND d.last_seen_at <= now()-make_interval(hours => s.offline_after_hours))''')
+        run(db, '''UPDATE device_offline_notifications SET status='pending',lease_token=NULL,
+            lease_expires_at=NULL,next_attempt_at=now()
+            WHERE status='processing' AND lease_expires_at<now()''')
+        alert = one(db, '''SELECT a.id,a.sim_id,a.device_id,a.channel_id,a.offline_since,a.generation,
+            a.attempts FROM device_offline_notifications a WHERE a.status='pending'
+            AND a.next_attempt_at<=now() ORDER BY a.next_attempt_at
+            FOR UPDATE SKIP LOCKED LIMIT 1''')
+        if not alert:
+            return
+        token = uuid4()
+        run(db, '''UPDATE device_offline_notifications SET status='processing',attempts=attempts+1,
+            lease_token=:token,lease_expires_at=now()+interval '2 minutes'
+            WHERE id=:id''', token=token, id=alert['id'])
+    with engine().begin() as db:
+        data = one(db, '''SELECT s.name,s.phone_number,s.offline_after_hours,
+            c.type,c.config,c.credentials_encrypted FROM device_offline_notifications a
+            JOIN sim_cards s ON s.id=a.sim_id JOIN devices d ON d.id=s.device_id
+            JOIN notification_channels c ON c.id=s.offline_channel_id
+            WHERE a.id=:id AND a.lease_token=:token AND a.status='processing'
+              AND d.id=a.device_id AND c.id=a.channel_id
+              AND s.offline_alert_generation=a.generation AND d.last_seen_at=a.offline_since
+              AND d.enabled AND d.key_revoked_at IS NULL AND c.enabled AND c.deleted_at IS NULL
+              AND d.last_seen_at <= now()-make_interval(hours => s.offline_after_hours)''',
+            id=alert['id'], token=token)
+    if not data:
+        with engine().begin() as db:
+            run(db, "UPDATE device_offline_notifications SET status='cancelled',lease_token=NULL,lease_expires_at=NULL WHERE id=:id AND lease_token=:token",
+                id=alert['id'], token=token)
+        return
+    title = f"{data['name']} · 设备离线"
+    content = (f"电话卡：{data['name']} {data['phone_number'] or ''}\n"
+               f"设备自 {alert['offline_since'].isoformat()} 起未连接平台，"
+               f"已超过设置的 {data['offline_after_hours']} 小时。")
+    try:
+        # Channel SMS keywords and extraction rules do not apply to system alerts.
+        deliver(data['type'], data['config'], json.loads(decrypt(data['credentials_encrypted'])), title, content)
+    except DeliveryError as exc:
+        with engine().begin() as db:
+            run(db, '''UPDATE device_offline_notifications SET status='pending',last_error=:error,
+                next_attempt_at=now()+make_interval(secs => :delay),lease_token=NULL,
+                lease_expires_at=NULL WHERE id=:id AND lease_token=:token AND status='processing' ''',
+                error=str(exc), delay=DELAYS[min(alert['attempts'], len(DELAYS)-1)],
+                id=alert['id'], token=token)
+    else:
+        with engine().begin() as db:
+            run(db, '''UPDATE device_offline_notifications SET status='sent',sent_at=now(),
+                last_error=NULL,lease_token=NULL,lease_expires_at=NULL
+                WHERE id=:id AND lease_token=:token AND status='processing' ''', id=alert['id'], token=token)

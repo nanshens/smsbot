@@ -22,5 +22,6 @@ def start_scheduler():
     )
     scheduler.add_job(guarded, 'interval', seconds=1, args=[worker.forward_once], id='forwarding')
     scheduler.add_job(guarded, 'interval', seconds=30, args=[worker.maintenance], id='maintenance')
+    scheduler.add_job(guarded, 'interval', seconds=30, args=[worker.offline_alert_once], id='offline-alerts')
     scheduler.start()
     return scheduler

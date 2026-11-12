@@ -5,7 +5,7 @@ import { api, post, date } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { action, Confirm, Empty, Field, LoadError, Modal, Status, useData } from '@/components/common'
 
-export type Sim = { id: string; name: string; phone_number?: string; iccid: string; device_id?: string; online: boolean; operator_name?: string; signal_dbm?: number; sim_status?: string; network_status?: string; last_seen_at?: string; notes?: string; channel_ids: string[]; queue_depth: number; last_error?: string }
+export type Sim = { id: string; name: string; phone_number?: string; iccid: string; device_id?: string; online: boolean; operator_name?: string; signal_dbm?: number; sim_status?: string; network_status?: string; last_seen_at?: string; notes?: string; channel_ids: string[]; offline_channel_id?: string | null; offline_after_hours?: number; queue_depth: number; last_error?: string }
 export type Message = { id: string; sim_id: string; sim_name: string; sim_phone?: string; body: string; sender?: string; recipient?: string; status?: string; received_at?: string; created_at?: string; modem_received_at?: string; last_error?: string; forwarding?: any[]; attempts?: any[] }
 
 export function Compose({ sims, onClose, onSent, original }: { sims: Sim[]; onClose: () => void; onSent: () => void; original?: Message }) {

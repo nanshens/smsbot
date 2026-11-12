@@ -10,6 +10,7 @@ def test_lifespan_jobs_run_without_blocking_api_and_stop(monkeypatch):
     release = threading.Event()
     finished = threading.Event()
     maintained = threading.Event()
+    checked_offline = threading.Event()
 
     def forwarding():
         entered.set()
@@ -18,17 +19,21 @@ def test_lifespan_jobs_run_without_blocking_api_and_stop(monkeypatch):
 
     monkeypatch.setattr(worker, 'forward_once', forwarding)
     monkeypatch.setattr(worker, 'maintenance', maintained.set)
+    monkeypatch.setattr(worker, 'offline_alert_once', checked_offline.set)
     with TestClient(main.app) as client:
         scheduler = main.app.state.scheduler
         assert scheduler.running
         assert scheduler.get_job('forwarding').max_instances == 1
         assert scheduler.get_job('maintenance').trigger.interval.total_seconds() == 30
+        assert scheduler.get_job('offline-alerts').trigger.interval.total_seconds() == 30
         scheduler.reschedule_job('forwarding', trigger='interval', seconds=0.05)
         scheduler.reschedule_job('maintenance', trigger='interval', seconds=0.05)
+        scheduler.reschedule_job('offline-alerts', trigger='interval', seconds=0.05)
         try:
             assert entered.wait(3)
             assert client.get('/not-an-endpoint').status_code == 404
             assert maintained.wait(3)  # Cleanup isn't blocked by notification I/O.
+            assert checked_offline.wait(3)
         finally:
             release.set()
     assert finished.is_set()
